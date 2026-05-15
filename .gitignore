@@ -27,3 +27,5 @@ docs/.vitepress/cache/
 docs/.vitepress/dist/
 *.tsbuildinfo
 artifacts/
+
+dist/
