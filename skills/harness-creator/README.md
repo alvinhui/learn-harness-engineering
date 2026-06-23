@@ -25,10 +25,10 @@ The scripts use only Node.js built-in modules. They can be run after copying the
 ## What It Creates
 
 - `AGENTS.md` or `CLAUDE.md`
-- `feature_list.json`
-- `progress.md`
+- `.ai/state/feature-list.json`
+- `.ai/state/progress.md`
 - `init.sh`
-- `session-handoff.md`
+- `.ai/state/session-handoff.md`
 
 `create-harness.mjs` detects common project types and package managers. It supports Node/npm/pnpm/yarn/bun, Python, Go, Rust, Maven, Gradle, and .NET at a basic verification-command level.
 

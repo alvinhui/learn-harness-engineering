@@ -64,7 +64,7 @@ Context builders (e.g., "load all recent git commits") should be memoized to avo
 
 - Repository root path
 - Tech stack (one line)
-- Active feature ID from feature_list.json
+- Active feature ID from .ai/state/feature-list.json
 
 ## On-Demand Context (Loaded When Triggered)
 

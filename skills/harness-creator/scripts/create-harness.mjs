@@ -19,9 +19,9 @@ if (args.help) {
 
 Creates a minimal production harness:
   AGENTS.md or CLAUDE.md
-  feature_list.json
-  progress.md
-  session-handoff.md
+  .ai/state/feature-list.json
+  .ai/state/progress.md
+  .ai/state/session-handoff.md
   init.sh
 
 Existing files are skipped unless --force is set.`);
@@ -50,9 +50,9 @@ const replacements = {
 
 const results = [];
 results.push(await copyTemplate('agents.md', path.join(target, agentFile), replacements, { force }));
-results.push(await copyTemplate('feature-list.json', path.join(target, 'feature_list.json'), {}, { force }));
-results.push(await copyTemplate('progress.md', path.join(target, 'progress.md'), {}, { force }));
-results.push(await copyTemplate('session-handoff.md', path.join(target, 'session-handoff.md'), {}, { force }));
+results.push(await copyTemplate('feature-list.json', path.join(target, '.ai/state/feature-list.json'), {}, { force }));
+results.push(await copyTemplate('progress.md', path.join(target, '.ai/state/progress.md'), {}, { force }));
+results.push(await copyTemplate('session-handoff.md', path.join(target, '.ai/state/session-handoff.md'), {}, { force }));
 
 const initPath = path.join(target, 'init.sh');
 if (force || !await exists(initPath)) {

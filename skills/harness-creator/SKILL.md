@@ -4,10 +4,13 @@ description: >-
   Build, audit, and improve harnesses that make AI coding agents reliable: AGENTS.md/CLAUDE.md
   instruction files, feature/state tracking, verification gates, scope boundaries, session
   handoff, memory persistence, context budgets, tool-permission safety, and multi-agent
-  coordination. Use this whenever a coding agent is unreliable across sessions — forgets context,
-  drifts out of scope, claims "done" before tests pass, or starts each session inconsistently —
-  or when creating or assessing AGENTS.md, CLAUDE.md, feature_list.json, init.sh, progress.md, or
-  session-handoff files. Reach for it even if the user never says the word "harness."
+  coordination. Also retrofits an existing/legacy repo into a full harness — generating an
+  .ai/ knowledge base (steering, context, ADRs) and tool adapters (.cursor/rules, .claude)
+  from the repo's code, docs, and git history. Use this whenever a coding agent is unreliable
+  across sessions — forgets context, drifts out of scope, claims "done" before tests pass, or
+  starts each session inconsistently — or when creating, retrofitting, or assessing AGENTS.md,
+  CLAUDE.md, feature-list.json, init.sh, progress.md, or session-handoff files. Reach for it
+  even if the user never says the word "harness."
 license: MIT
 ---
 
@@ -24,10 +27,10 @@ Every useful coding-agent harness has five subsystems:
 | Subsystem | Minimal artifact | Purpose |
 |---|---|---|
 | Instructions | `AGENTS.md` or `CLAUDE.md` | Startup path, working rules, definition of done |
-| State | `feature_list.json`, `progress.md` | Current feature, status, evidence, next step |
+| State | `.ai/state/feature-list.json`, `.ai/state/progress.md` | Current feature, status, evidence, next step |
 | Verification | `init.sh` or documented commands | Tests/checks the agent must run before claiming done |
 | Scope | Feature dependencies and done criteria | Prevents overreach and half-finished work |
-| Lifecycle | `session-handoff.md`, end-of-session routine | Makes the next session restartable |
+| Lifecycle | `.ai/state/session-handoff.md`, end-of-session routine | Makes the next session restartable |
 
 ## First Move
 
@@ -62,7 +65,48 @@ Run:
 node skills/harness-creator/scripts/validate-harness.mjs --target /path/to/project
 ```
 
-Report the five subsystem scores, the lowest-scoring area, and the first 2-3 changes that would improve reliability. Treat the lowest score as a candidate bottleneck; confirm with failures, logs, or task outcomes before claiming causality.
+Report the five subsystem scores, the lowest-scoring area, and the first 2-3 changes that would improve reliability. Treat the lowest score as a candidate bottleneck; confirm with failures, logs, or task outcomes before claiming causality. State files are read from `.ai/state/` (`feature-list.json`, `progress.md`, `session-handoff.md`).
+
+### Retrofit an existing repository
+
+Use when a repo already has code, docs, and git history but lacks a real harness — a flat `AGENTS.md` (or nothing), no `.ai/` knowledge base, no tool adapters. The goal is a project-specific harness, not generic placeholders. Scripts collect signals and scaffold structure; you (the agent) generate the content.
+
+1. **Analyze** the repository:
+
+```bash
+node skills/harness-creator/scripts/retrofit-harness.mjs --target /path/to/repo --analyze-only
+```
+
+This prints a JSON report: stack, verification commands, source structure, documentation excerpts, existing harness fragments, CI/CD, and git history (recent commits, hot files, contributors).
+
+2. **Read** the report. Note what already exists (`existingHarness`) so you preserve it, and read the actual source/README/docs the report points to — do not invent project facts.
+
+3. **Generate content** for each target, grounded in the analysis:
+   - `AGENTS.md` — fill `templates/retrofit/agents-rich.md`: real Project Map (use `sourceStructure`), Working Rules (real constraints), Change Requirements, verification block.
+   - `.ai/steering/architecture.md`, `implementation-notes.md`, optional `deployment.md` — from source structure, complex modules, and CI config.
+   - `.ai/context/project-origin.md` — from README and the earliest git commits.
+   - Tool adapters — `.cursor/rules/00-harness.mdc` and `.claude/settings.local.json` from the retrofit templates.
+
+4. **Write a scaffold plan** (JSON) and run it. The plan lists directories and files; each file uses an action: `template` (render a retrofit template), `generate` (write your content), or `overwrite`. State files are created under `.ai/state/`. Existing files are preserved unless the plan opts in.
+
+```bash
+node skills/harness-creator/scripts/retrofit-harness.mjs --target /path/to/repo --scaffold plan.json
+```
+
+Running with no mode flag prints the analysis plus a suggested plan skeleton you can edit.
+
+5. **Fill** any files the scaffold left stubbed, then **validate**:
+
+```bash
+node skills/harness-creator/scripts/validate-harness.mjs --target /path/to/repo
+```
+
+#### Retrofit principles
+
+- Read before write — analyze existing docs and code before generating content.
+- Preserve over replace — incorporate existing harness fragments; re-running only adds missing layers.
+- Specific over generic — a Project Map with real paths beats template placeholders.
+- Agent-driven content — scripts scaffold structure; you generate meaning from the analysis.
 
 ### Produce a report
 
@@ -102,10 +146,10 @@ Load only the reference needed for the user's problem:
 For a usable minimal harness, leave the target project with:
 
 - [ ] `AGENTS.md` or `CLAUDE.md`
-- [ ] `feature_list.json`
-- [ ] `progress.md`
+- [ ] `.ai/state/feature-list.json`
+- [ ] `.ai/state/progress.md`
 - [ ] `init.sh`
-- [ ] Optional `session-handoff.md` for multi-session work
+- [ ] Optional `.ai/state/session-handoff.md` for multi-session work
 - [ ] Documented verification evidence or next action
 
 If you cannot create files, provide exact file contents and commands instead.

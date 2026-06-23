@@ -1,11 +1,14 @@
 {
   "name": "harness-creator",
   "version": "1.0.0",
-  "description": "Harness engineering for AI coding agents — five subsystems, memory persistence, session continuity, verification workflows, scope control, lifecycle management.",
+  "description": "Harness engineering for AI coding agents — five core subsystems plus retrofit of legacy repos into a full .ai/ knowledge base and multi-tool adapters.",
   "license": "MIT",
   "author": "Learn Harness Engineering",
   "repository": "https://github.com/walkinglabs/learn-harness-engineering",
-  "languages": ["en", "zh"],
+  "languages": [
+    "en",
+    "zh"
+  ],
   "compatibility": {
     "minCliVersion": "0.1.0",
     "agents": [
@@ -41,7 +44,12 @@
     "multi-agent coordination",
     "context engineering",
     "tool safety",
-    "permission pipeline"
+    "permission pipeline",
+    "retrofit harness",
+    "upgrade harness",
+    "legacy repo harness",
+    "AI-ready repository",
+    ".ai directory"
   ],
   "bundled": {
     "scripts": [
@@ -49,7 +57,9 @@
       "scripts/validate-harness.mjs",
       "scripts/render-assessment-html.mjs",
       "scripts/run-benchmark.mjs",
-      "scripts/lib/harness-utils.mjs"
+      "scripts/lib/harness-utils.mjs",
+      "scripts/analyze-repo.mjs",
+      "scripts/retrofit-harness.mjs"
     ],
     "assets": [],
     "templates": [
@@ -58,7 +68,18 @@
       "templates/feature-list.schema.json",
       "templates/init.sh",
       "templates/progress.md",
-      "templates/session-handoff.md"
+      "templates/session-handoff.md",
+      "templates/retrofit/agents-rich.md",
+      "templates/retrofit/architecture.md",
+      "templates/retrofit/implementation-notes.md",
+      "templates/retrofit/deployment.md",
+      "templates/retrofit/project-origin.md",
+      "templates/retrofit/adr-template.md",
+      "templates/retrofit/cursor-harness.mdc",
+      "templates/retrofit/claude-settings.json",
+      "templates/retrofit/init-multimode.sh",
+      "templates/retrofit/ai-readme.md",
+      "templates/retrofit/feature-list-real.json"
     ]
   }
 }

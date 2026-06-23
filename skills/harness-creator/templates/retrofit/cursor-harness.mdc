@@ -1,0 +1,28 @@
+---
+description: {{RULE_DESCRIPTION}}
+alwaysApply: true
+---
+
+# Harness
+
+{{PROJECT_ONE_LINER}}
+
+Before any task, read these and follow them:
+
+- @AGENTS.md
+- @.ai/steering/architecture.md
+- @.ai/steering/implementation-notes.md
+- @.ai/state/feature-list.json
+- @.ai/state/progress.md
+- @.ai/state/session-handoff.md
+
+## Hard Rules
+
+{{HARD_RULES}}
+
+## Workflow
+
+1. Read the files above before writing code.
+2. Work on exactly one feature from `.ai/state/feature-list.json`.
+3. Run the verification entrypoint and record evidence before claiming done.
+4. Update `.ai/state/progress.md` and `.ai/state/session-handoff.md` at end of session.

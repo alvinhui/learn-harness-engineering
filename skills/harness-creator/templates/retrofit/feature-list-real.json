@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "project": "{{PROJECT_NAME}}",
+  "features": [
+    {
+      "id": "feat-001",
+      "name": "Harness adoption",
+      "description": "Confirm the harness is in place: agents can start from a clean checkout, run verification, and resume from state files.",
+      "status": "in-progress",
+      "dependencies": []
+    }
+  ]
+}

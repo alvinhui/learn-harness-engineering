@@ -1,10 +1,15 @@
+import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { access, chmod, copyFile, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
 
 export const SKILL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const TEMPLATE_DIR = path.join(SKILL_ROOT, 'templates');
+export const RETROFIT_TEMPLATE_DIR = path.join(TEMPLATE_DIR, 'retrofit');
 export const SUBSYSTEMS = ['instructions', 'state', 'verification', 'scope', 'lifecycle'];
 
 export function parseArgs(argv) {
@@ -140,6 +145,199 @@ export async function listFiles(root, { maxFiles = 1000 } = {}) {
   return results.sort();
 }
 
+// --- Retrofit analysis -----------------------------------------------------
+// These helpers only COLLECT signals. The agent running the skill turns them
+// into project-specific harness content; scripts never call an LLM.
+
+async function git(root, args) {
+  try {
+    const { stdout } = await execFileAsync('git', args, { cwd: root, maxBuffer: 10 * 1024 * 1024 });
+    return stdout.trim();
+  } catch {
+    return null;
+  }
+}
+
+export async function analyzeGitHistory(root, { recentCount = 30, hotCount = 15 } = {}) {
+  const inside = await git(root, ['rev-parse', '--is-inside-work-tree']);
+  if (inside !== 'true') {
+    return { available: false };
+  }
+
+  const firstCommit = await git(root, ['log', '--reverse', '--format=%ad', '--date=short', '-1']);
+  const totalCommits = await git(root, ['rev-list', '--count', 'HEAD']);
+  const recentRaw = await git(root, ['log', `-${recentCount}`, '--format=%ad | %s', '--date=short']);
+  const contributorsRaw = await git(root, ['shortlog', '-sn', '--all', 'HEAD']);
+  // File churn: count how often each path appears across recent history.
+  const churnRaw = await git(root, ['log', '--name-only', '--format=', '-200']);
+
+  const recentCommits = recentRaw ? recentRaw.split('\n').filter(Boolean) : [];
+  const contributors = contributorsRaw
+    ? contributorsRaw.split('\n').map((line) => line.trim().replace(/^\d+\s+/, '')).filter(Boolean).slice(0, 10)
+    : [];
+
+  let hotFiles = [];
+  if (churnRaw) {
+    const counts = new Map();
+    for (const file of churnRaw.split('\n').map((line) => line.trim()).filter(Boolean)) {
+      counts.set(file, (counts.get(file) || 0) + 1);
+    }
+    hotFiles = [...counts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, hotCount)
+      .map(([file, changes]) => ({ file, changes }));
+  }
+
+  return {
+    available: true,
+    firstCommit: firstCommit || null,
+    totalCommits: totalCommits ? Number(totalCommits) : null,
+    recentCommits,
+    contributors,
+    hotFiles
+  };
+}
+
+export async function findExistingHarness(root) {
+  const aiDir = path.join(root, '.ai');
+  const ai = await exists(aiDir)
+    ? {
+        steering: await listDirNames(path.join(aiDir, 'steering')),
+        context: await listDirNames(path.join(aiDir, 'context')),
+        adr: await listDirNames(path.join(aiDir, 'adr')),
+        state: await listDirNames(path.join(aiDir, 'state')),
+        history: await exists(path.join(aiDir, 'history'))
+      }
+    : null;
+
+  return {
+    agentsFile: await firstExisting(root, ['AGENTS.md', 'CLAUDE.md']),
+    aiDir: ai,
+    cursorRules: await exists(path.join(root, '.cursor', 'rules')) ? '.cursor/rules' : null,
+    claudeSettings: await firstExisting(root, ['.claude/settings.json', '.claude/settings.local.json']),
+    initScript: await exists(path.join(root, 'init.sh')) ? 'init.sh' : null,
+    featureList: await firstExisting(root, ['.ai/state/feature-list.json']),
+    progress: await firstExisting(root, ['.ai/state/progress.md']),
+    specsDir: await exists(path.join(root, 'specs')) ? 'specs' : null
+  };
+}
+
+async function listDirNames(dir) {
+  if (!await exists(dir)) return null;
+  try {
+    const entries = await readdir(dir, { withFileTypes: true });
+    return entries.map((entry) => entry.name).sort();
+  } catch {
+    return null;
+  }
+}
+
+async function firstExisting(root, candidates) {
+  for (const candidate of candidates) {
+    if (await exists(path.join(root, candidate))) return candidate;
+  }
+  return null;
+}
+
+export async function extractDocumentation(root, files, { maxBytes = 16000 } = {}) {
+  const docs = { readme: null, docFiles: [] };
+  const readmePath = files.find((file) => /^readme(\.md|\.markdown)?$/i.test(file));
+  if (readmePath) {
+    docs.readme = { path: readmePath, content: await readClamped(path.join(root, readmePath), maxBytes) };
+  }
+  const docCandidates = files.filter((file) =>
+    /^(docs?|documentation)\//i.test(file) && /\.(md|markdown|mdx)$/i.test(file)
+    || /^(architecture|contributing|design)\b.*\.(md|markdown)$/i.test(file)
+  ).slice(0, 12);
+  for (const file of docCandidates) {
+    docs.docFiles.push({ path: file, content: await readClamped(path.join(root, file), maxBytes) });
+  }
+  return docs;
+}
+
+async function readClamped(filePath, maxBytes) {
+  try {
+    const content = await readText(filePath);
+    return content.length > maxBytes ? `${content.slice(0, maxBytes)}\n…[truncated]` : content;
+  } catch {
+    return null;
+  }
+}
+
+export function analyzeSourceStructure(files, packageJson) {
+  const codeExt = /\.([cm]?[jt]sx?|py|go|rs|java|cs)$/i;
+  const isTest = (file) =>
+    (/(^|\/)(__tests__|tests?|spec|e2e)\//i.test(file) && codeExt.test(file))
+    || /\.(test|spec)\.[cm]?[jt]sx?$/i.test(file)
+    || /_test\.(py|go)$/i.test(file);
+  const isSource = (file) => /^(src|lib|app|packages|internal|pkg|cmd)\//i.test(file) && codeExt.test(file);
+  const isConfig = (file) => /\.(json|ya?ml|toml|config\.[cm]?[jt]s)$/i.test(file) || /^(tsconfig|vite|vitest|rollup|rslib|rspress|webpack|babel|jest|playwright)\b/i.test(file);
+
+  const tests = files.filter(isTest);
+  const source = files.filter((file) => isSource(file) && !isTest(file));
+  const config = files.filter((file) => isConfig(file) && !isTest(file));
+
+  const entryPoints = [];
+  for (const key of ['main', 'module', 'types']) {
+    const value = packageJson?.[key];
+    if (typeof value === 'string') entryPoints.push(value.replace(/^\.\//, ''));
+  }
+  if (packageJson?.exports) entryPoints.push('package.json#exports');
+  for (const guess of ['src/index.ts', 'src/index.js', 'src/main.ts', 'index.ts', 'main.go', 'src/main.py']) {
+    if (files.includes(guess)) entryPoints.push(guess);
+  }
+
+  return {
+    entryPoints: dedupe(entryPoints),
+    source: source.slice(0, 60),
+    tests: tests.slice(0, 40),
+    config: config.slice(0, 30),
+    scripts: packageJson?.scripts ?? {}
+  };
+}
+
+export function detectCICD(files) {
+  if (files.some((file) => file.startsWith('.github/workflows/'))) {
+    return { detected: 'github-actions', configPaths: files.filter((file) => file.startsWith('.github/workflows/')).slice(0, 5) };
+  }
+  if (files.includes('.gitlab-ci.yml')) {
+    return { detected: 'gitlab-ci', configPaths: ['.gitlab-ci.yml'] };
+  }
+  if (files.includes('Jenkinsfile')) {
+    return { detected: 'jenkins', configPaths: ['Jenkinsfile'] };
+  }
+  if (files.some((file) => file.startsWith('.circleci/'))) {
+    return { detected: 'circleci', configPaths: ['.circleci/config.yml'] };
+  }
+  return { detected: 'none', configPaths: [] };
+}
+
+export async function analyzeRepo(root, options = {}) {
+  const project = await detectProject(root);
+  project.packageManager = detectPackageManager(root, options.packageManager);
+  const [gitSummary, existingHarness, documentation] = await Promise.all([
+    analyzeGitHistory(root),
+    findExistingHarness(root),
+    extractDocumentation(root, project.files)
+  ]);
+
+  return {
+    root,
+    stack: project.stack,
+    packageManager: project.packageManager,
+    packageJson: project.packageJson
+      ? { name: project.packageJson.name, version: project.packageJson.version, scripts: project.packageJson.scripts ?? {} }
+      : null,
+    verificationCommands: verificationCommands(project, options.packageManager),
+    sourceStructure: analyzeSourceStructure(project.files, project.packageJson),
+    documentation,
+    existingHarness,
+    cicd: detectCICD(project.files),
+    gitSummary,
+    fileCount: project.files.length
+  };
+}
+
 export function verificationCommands(project, explicitPackageManager) {
   const pm = explicitPackageManager || project.packageManager || 'npm';
   const scripts = project.packageJson?.scripts ?? {};
@@ -202,7 +400,7 @@ ${body}
 echo "=== Verification Complete ==="
 echo ""
 echo "Next steps:"
-echo "1. Read feature_list.json to see current feature state"
+echo "1. Read .ai/state/feature-list.json to see current feature state"
 echo "2. Pick ONE unfinished feature to work on"
 echo "3. Implement only that feature"
 echo "4. Re-run verification before claiming done"
@@ -221,10 +419,10 @@ export function scoreHarness(files) {
   const byPath = new Map(files.map((file) => [file.path, file.content]));
   const allText = files.map((file) => `${file.path}\n${file.content}`).join('\n\n');
   const agents = byPath.get('AGENTS.md') || byPath.get('CLAUDE.md') || '';
-  const featureList = byPath.get('feature_list.json') || byPath.get('feature-list.json') || '';
-  const progress = byPath.get('progress.md') || '';
+  const featureList = byPath.get('.ai/state/feature-list.json') || '';
+  const progress = byPath.get('.ai/state/progress.md') || '';
   const init = byPath.get('init.sh') || '';
-  const handoff = byPath.get('session-handoff.md') || '';
+  const handoff = byPath.get('.ai/state/session-handoff.md') || '';
 
   const checks = {
     instructions: [
@@ -232,35 +430,35 @@ export function scoreHarness(files) {
       structuredHas(agents, ['Startup Workflow', 'Before writing code'], 'Startup workflow documented'),
       structuredHas(agents, ['Definition of Done', 'done only when'], 'Definition of done documented'),
       structuredHas(agents, ['Verification Commands', './init.sh', 'test', 'verify'], 'Verification commands discoverable'),
-      structuredHas(agents, ['feature_list.json', 'progress.md'], 'State artifacts routed from instructions')
+      structuredHas(agents, ['.ai/state', 'feature-list.json'], 'State artifacts routed from instructions')
     ],
     state: [
-      hasFile(byPath, ['feature_list.json', 'feature-list.json'], 'Feature tracker exists'),
+      hasFile(byPath, ['.ai/state/feature-list.json'], 'Feature tracker exists'),
       jsonFeatureList(featureList, 'Feature tracker is valid and has feature fields'),
-      hasFile(byPath, ['progress.md'], 'Progress log exists'),
+      hasAnyText(progress, 'Progress log exists'),
       structuredHas(progress, ['Current State', 'What', 'Next'], 'Progress log supports restart'),
-      structuredHas(handoff || progress, ['Blockers', 'Files', 'Next Session'], 'Handoff captures blockers/files/next step')
+      structuredHas(handoff || progress, ['Blockers', 'Files', 'Next Session', '风险', '下一步', '交接'], 'Handoff captures blockers/files/next step')
     ],
     verification: [
       hasFile(byPath, ['init.sh'], 'Verification entrypoint exists'),
       textHas(init, ['set -e'], 'Verification fails fast'),
       textHas(init + agents, ['test', 'pytest', 'vitest', 'cargo test', 'go test', 'dotnet test'], 'Test command documented'),
       textHas(init + agents, ['build', 'type', 'lint', 'compile'], 'Static/build check documented'),
-      textHas(allText, ['Evidence', 'Verification Evidence', 'command and output'], 'Verification evidence is recorded')
+      textHas(allText, ['Evidence', 'Verification Evidence', 'command and output', '验证结果'], 'Verification evidence is recorded')
     ],
     scope: [
-      structuredHas(agents, ['One feature at a time', 'one-feature-at-a-time'], 'One-feature-at-a-time rule exists'),
+      structuredHas(agents, ['One feature at a time', 'one-feature-at-a-time', '一个明确任务', '只处理一个'], 'One-feature-at-a-time rule exists'),
       textHas(featureList, ['dependencies'], 'Feature dependencies are tracked'),
       textHas(agents + featureList, ['status'], 'Feature status is explicit'),
-      structuredHas(agents, ['Stay in scope', 'scope'], 'Scope boundary documented'),
+      structuredHas(agents, ['Stay in scope', 'scope', 'Working Rules', '边界', '工作边界'], 'Scope boundary documented'),
       structuredHas(agents, ['Definition of Done'], 'Completion gate limits scope closure')
     ],
     lifecycle: [
       hasFile(byPath, ['init.sh'], 'Startup script exists'),
-      structuredHas(agents, ['End of Session', 'Before ending'], 'End-of-session procedure exists'),
-      hasFile(byPath, ['session-handoff.md'], 'Session handoff template exists'),
-      structuredHas(progress + '\n' + handoff, ['Last Updated', 'Current Objective', 'Recommended Next Step'], 'Session restart markers exist'),
-      textHas(agents + init, ['restartable', 'clean', 'Next steps'], 'Clean restart path documented')
+      structuredHas(agents, ['End of Session', 'Before ending', '收尾', '结束前'], 'End-of-session procedure exists'),
+      hasFile(byPath, ['.ai/state/session-handoff.md'], 'Session handoff template exists'),
+      structuredHas(progress + '\n' + handoff, ['Last Updated', 'Current Objective', 'Recommended Next Step', '下一步'], 'Session restart markers exist'),
+      textHas(agents + init, ['restartable', 'clean', 'Next steps', '接手'], 'Clean restart path documented')
     ]
   };
 
@@ -286,6 +484,10 @@ export function scoreHarness(files) {
 
 function hasFile(byPath, names, message) {
   return { pass: names.some((name) => byPath.has(name)), message };
+}
+
+function hasAnyText(text, message) {
+  return { pass: Boolean(text && text.trim()), message };
 }
 
 function textHas(text, needles, message) {
@@ -337,11 +539,10 @@ export async function loadHarnessFiles(root) {
   const candidates = [
     'AGENTS.md',
     'CLAUDE.md',
-    'feature_list.json',
-    'feature-list.json',
-    'progress.md',
-    'session-handoff.md',
-    'init.sh'
+    'init.sh',
+    '.ai/state/feature-list.json',
+    '.ai/state/progress.md',
+    '.ai/state/session-handoff.md'
   ];
   const files = [];
   for (const candidate of candidates) {
@@ -437,4 +638,102 @@ export async function copyFileSafe(source, target, { force = false } = {}) {
   await mkdir(path.dirname(target), { recursive: true });
   await copyFile(source, target);
   return { path: target, status: 'written' };
+}
+
+// --- Retrofit scaffolding --------------------------------------------------
+// The agent writes a scaffold plan (JSON); this executes it deterministically.
+// It NEVER overwrites a file unless the plan explicitly opts in, so re-running
+// retrofit only fills missing layers.
+
+export const RETROFIT_DIRECTORIES = [
+  '.ai',
+  '.ai/steering',
+  '.ai/context',
+  '.ai/adr',
+  '.ai/history',
+  '.ai/state'
+];
+
+export async function renderRetrofitTemplate(templateName, replacements = {}) {
+  let contents = await readText(path.join(RETROFIT_TEMPLATE_DIR, templateName));
+  for (const [key, value] of Object.entries(replacements)) {
+    contents = contents.split(`{{${key}}}`).join(value ?? '');
+  }
+  return contents;
+}
+
+function normalizePlan(plan) {
+  const directories = Array.isArray(plan.directories) && plan.directories.length
+    ? plan.directories
+    : RETROFIT_DIRECTORIES;
+  const files = [];
+  if (Array.isArray(plan.files)) {
+    files.push(...plan.files);
+  } else if (plan.files && typeof plan.files === 'object') {
+    for (const [target, spec] of Object.entries(plan.files)) {
+      files.push({ target, ...(typeof spec === 'object' ? spec : { action: spec }) });
+    }
+  }
+  return { directories, files };
+}
+
+export async function executeScaffoldPlan(root, plan, { force = false } = {}) {
+  const { directories, files } = normalizePlan(plan);
+  const results = [];
+
+  for (const dir of directories) {
+    const full = path.join(root, dir);
+    if (await exists(full)) {
+      results.push({ path: dir, status: 'skipped', reason: 'exists', kind: 'dir' });
+    } else {
+      await mkdir(full, { recursive: true });
+      results.push({ path: dir, status: 'created', kind: 'dir' });
+    }
+  }
+
+  for (const file of files) {
+    const target = file.target || file.path;
+    if (!target) {
+      results.push({ path: '(missing target)', status: 'error', reason: 'no target field' });
+      continue;
+    }
+    const action = file.action || 'generate';
+    const fullTarget = path.join(root, target);
+    const overwrite = force || file.overwrite === true || action === 'overwrite';
+
+    if (!overwrite && await exists(fullTarget)) {
+      results.push({ path: target, status: 'skipped', reason: 'exists' });
+      continue;
+    }
+
+    if (action === 'migrate') {
+      const from = file.from && path.join(root, file.from);
+      if (!from || !await exists(from)) {
+        results.push({ path: target, status: 'skipped', reason: `migrate source missing: ${file.from}` });
+        continue;
+      }
+      await writeText(fullTarget, await readText(from));
+      results.push({ path: target, status: 'migrated', from: file.from });
+      continue;
+    }
+
+    if (action === 'template') {
+      const content = await renderRetrofitTemplate(file.template, file.replacements || {});
+      await writeText(fullTarget, content);
+      if (target.endsWith('.sh')) await chmod(fullTarget, 0o755);
+      results.push({ path: target, status: 'written', source: `template:${file.template}` });
+      continue;
+    }
+
+    // action 'generate' or 'overwrite': write provided content, or a stub the
+    // agent is expected to fill in next.
+    const content = typeof file.content === 'string'
+      ? file.content
+      : `<!-- TODO(agent): generate project-specific content for ${target} -->\n`;
+    await writeText(fullTarget, content);
+    if (target.endsWith('.sh')) await chmod(fullTarget, 0o755);
+    results.push({ path: target, status: file.content ? 'written' : 'stubbed' });
+  }
+
+  return results;
 }

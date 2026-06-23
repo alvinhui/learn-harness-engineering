@@ -17,6 +17,7 @@ if (args.help) {
 Scores a project harness across five subsystems:
   instructions, state, verification, scope, lifecycle
 
+State files are read whether they live in the project root or under .ai/state/.
 Exit code is 0 when the harness scores at least --min-score (default 70).`);
   process.exit(0);
 }

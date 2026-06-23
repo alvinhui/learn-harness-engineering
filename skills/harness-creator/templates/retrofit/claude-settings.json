@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./init.sh:*)",
+      "Bash({{PM}} install)",
+      "Bash({{PM}} run test:*)",
+      "Bash({{PM}} test:*)",
+      "Bash({{PM}} run build:*)",
+      "Bash({{PM}} run typecheck:*)",
+      "Bash({{PM}} run lint:*)",
+      "Bash(git status)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)"
+    ],
+    "deny": []
+  }
+}
